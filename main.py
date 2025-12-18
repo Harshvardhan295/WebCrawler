@@ -48,8 +48,8 @@ app.add_middleware(
 # ================== MODELS ==================
 class CrawlRequest(BaseModel):
     url: str
-    max_depth: int = 2
-    max_pages: int = 20
+    max_depth: int = 3
+    max_pages: int = 5
 
 class Message(BaseModel):
     role: str
@@ -221,18 +221,38 @@ async def chat(req: ChatRequest):
                 sources.append(hit.payload["url"])
 
         prompt = f"""
-Use ONLY this context to answer.
+        CONTENT:
+        {context}
 
-Context:
-{context}
+        QUESTION:
+        {req.question}
 
-Question:
-{req.question}
+        INSTRUCTIONS:
+        - Answer only using the above content
+        - Keep the response concise, clear, and well-formatted
+        - Do not include unnecessary explanations
+
+        ANSWER:"""
+
+        SYSTEM_PROMPT = """
+You are an AI assistant for a Retrieval-Augmented Generation (RAG) system.
+
+You must generate answers using ONLY the information provided in the CONTENT.
+Do NOT use any prior knowledge or assumptions.
+
+Rules:
+- If the answer is not present, say the information is not available.
+- Ensure clarity, correctness, and good formatting.
+- Do not hallucinate.
 """
-
         response = gemini_client.models.generate_content(
             model="gemini-2.0-flash",
-            contents=prompt
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.9,
+                max_output_tokens=512
+            )
         )
 
         return {

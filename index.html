@@ -29,7 +29,7 @@
             color: var(--text-main);
         }
 
-        /* Sidebar - Strategic Controls */
+        /* Sidebar */
         .sidebar { 
             width: 320px; 
             background: var(--sidebar-bg); 
@@ -41,7 +41,6 @@
         }
 
         h3 { margin: 0 0 10px 0; font-size: 1.25rem; display: flex; align-items: center; gap: 8px; }
-        
         .input-group { display: flex; flex-direction: column; gap: 8px; }
         label { font-size: 0.85rem; font-weight: 600; color: var(--text-sub); }
 
@@ -50,7 +49,7 @@
             border: 1px solid var(--border); 
             border-radius: 8px; 
             outline: none; 
-            transition: border 0.2s;
+            transition: all 0.2s;
         }
         input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1); }
 
@@ -62,10 +61,14 @@
             border: none; 
             border-radius: 8px; 
             font-weight: 600;
-            transition: background 0.2s;
+            transition: all 0.2s;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
         }
         .btn:hover { background: var(--primary-hover); }
-        .btn:disabled { background: var(--text-sub); cursor: not-allowed; }
+        .btn:disabled { background: var(--text-sub); cursor: not-allowed; opacity: 0.7; }
 
         .status-card { 
             background: #f1f5f9; 
@@ -83,7 +86,7 @@
             color: var(--text-sub);
         }
 
-        /* Chat Interface - Focused Execution */
+        /* Chat Interface */
         .chat-container { 
             flex: 1; 
             display: flex; 
@@ -103,7 +106,7 @@
             gap: 20px;
         }
 
-        .message { max-width: 80%; padding: 14px 18px; border-radius: 12px; line-height: 1.5; }
+        .message { max-width: 85%; padding: 14px 18px; border-radius: 12px; line-height: 1.5; position: relative; }
         .user { 
             align-self: flex-end; 
             background: var(--chat-user); 
@@ -118,6 +121,29 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.02);
         }
 
+        /* Clickable Source Chips */
+        .source-container {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+        }
+        .source-link {
+            font-size: 0.7rem;
+            color: var(--primary);
+            background: rgba(99, 102, 241, 0.1);
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-decoration: none;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin: 2px;
+            transition: 0.2s;
+        }
+        .source-link:hover { background: var(--primary); color: white; }
+
+        /* Input Area */
         .input-area {
             padding: 24px;
             background: var(--bg);
@@ -137,7 +163,9 @@
         #chatInput { border: none; flex: 1; padding: 10px; font-size: 1rem; }
         #chatInput:focus { outline: none; }
 
-        /* Scrollbar Styling */
+        /* Typing/Loading Indicator */
+        .typing { font-style: italic; color: var(--text-sub); font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
+
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
@@ -146,11 +174,11 @@
 <body>
 
 <div class="sidebar">
-    <h3><i class="fas fa-microchip" style="color:var(--primary)"></i> SPEX AI</h3>
+    <h3><i class="fas fa-microchip" style="color:var(--primary)"></i> NEXUS RAG</h3>
     
     <div class="input-group">
         <label>KNOWLEDGE SOURCE</label>
-        <input id="urlInput" placeholder="https://example.com">
+        <input id="urlInput" placeholder="https://example.com" value="">
         <button id="indexBtn" class="btn" onclick="startCrawl()">
             <i class="fas fa-spider"></i> Start Indexing
         </button>
@@ -160,7 +188,7 @@
         <div style="font-weight:700; color:var(--primary); margin-bottom:5px;">
             <i class="fas fa-database"></i> ACTIVE COLLECTION
         </div>
-        <code id="collectionId" style="font-size:0.75rem"></code>
+        <code id="collectionId" style="font-size:0.75rem; word-break: break-all;"></code>
     </div>
 
     <div class="status-card" id="crawledCard" style="display:none">
@@ -177,7 +205,7 @@
     <div class="input-area">
         <div class="chat-input-wrapper">
             <input id="chatInput" placeholder="Ask anything about the indexed data..." onkeypress="if(event.key==='Enter')send()">
-            <button class="btn" onclick="send()" style="padding: 10px 20px;">
+            <button id="sendBtn" class="btn" onclick="send()" style="padding: 10px 20px;">
                 <i class="fas fa-paper-plane"></i>
             </button>
         </div>
@@ -186,21 +214,23 @@
 
 <script>
     const API = "http://localhost:8000";
-    let collection = null, history = [];
+    let collection = null;
+    let history = []; // Correct format: [{role: "user", content: ""}, {role: "model", content: ""}]
 
     async function startCrawl() {
         const btn = document.getElementById('indexBtn');
         const url = document.getElementById('urlInput').value;
         if(!url) return alert("Enter a URL");
 
+        // UI State: Loading
         btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Indexing...';
+        btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Indexing...';
 
         try {
-            const res = await fetch(API + "/crawl", {
+            const res = await fetch(`${API}/crawl`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url, max_pages: 5, max_depth: 3 })
+                body: JSON.stringify({ url, max_pages: 10, max_depth: 2 })
             });
             const d = await res.json();
 
@@ -210,10 +240,12 @@
 
             const list = document.getElementById('crawledList');
             list.innerHTML = "";
-            d.crawled_urls.forEach(u => list.innerHTML += `<li><a href="${u}" target="_blank" style="color:inherit;text-decoration:none">${u}</a></li>`);
+            d.crawled_urls.forEach(u => {
+                list.innerHTML += `<li><a href="${u}" target="_blank" style="color:inherit;text-decoration:none">${u}</a></li>`;
+            });
             document.getElementById('crawledCard').style.display = "block";
 
-            addMessage('ai', `Success: Indexed **${d.pages_indexed}** pages.`);
+            addMessage('ai', `Success: Indexed **${d.pages_indexed}** pages into \`${collection}\`.`);
         } catch (e) {
             addMessage('ai', 'Error: Failed to connect to backend.');
         } finally {
@@ -224,33 +256,86 @@
 
     async function send() {
         const input = document.getElementById('chatInput');
-        const q = input.value;
+        const sendBtn = document.getElementById('sendBtn');
+        const q = input.value.trim();
+        
         if(!q) return;
+        if(!collection) return addMessage('ai', 'Please index a website first.');
 
+        // UI State: User Message
         addMessage('user', q);
         input.value = "";
+        
+        // Show AI Loading State
+        const loadingId = addLoadingIndicator();
+        sendBtn.disabled = true;
 
         try {
-            const r = await fetch(API + "/chat", {
+            const r = await fetch(`${API}/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ collection_name: collection, question: q, history })
+                body: JSON.stringify({ 
+                    collection_name: collection, 
+                    question: q, 
+                    history: history 
+                })
             });
             const d = await r.json();
-            addMessage('ai', d.answer);
-            history.push([q, d.answer]);
+            
+            removeLoadingIndicator(loadingId);
+            
+            // Render Answer with Sources
+            addMessage('ai', d.answer, d.sources);
+            
+            // Update History (matches backend Message model)
+            history.push({ role: "user", content: q });
+            history.push({ role: "model", content: d.answer });
+            
         } catch (e) {
+            removeLoadingIndicator(loadingId);
             addMessage('ai', 'Error: The server is not responding.');
+        } finally {
+            sendBtn.disabled = false;
         }
     }
 
-    function addMessage(sender, text) {
+    function addMessage(sender, text, sources = []) {
         const container = document.getElementById('messages');
         const div = document.createElement('div');
         div.className = `message ${sender}`;
-        div.innerHTML = marked.parse(text);
+        
+        let html = marked.parse(text);
+
+        if (sources && sources.length > 0) {
+            html += `<div class="source-container">
+                <div style="font-size:0.65rem; font-weight:bold; color:var(--text-sub); margin-bottom:4px;">SOURCES</div>
+                ${sources.map(s => {
+                    const name = new URL(s).pathname === "/" ? "Homepage" : new URL(s).pathname;
+                    return `<a href="${s}" target="_blank" class="source-link"><i class="fas fa-link"></i> ${name}</a>`
+                }).join('')}
+            </div>`;
+        }
+
+        div.innerHTML = html;
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
+    }
+
+    function addLoadingIndicator() {
+        const container = document.getElementById('messages');
+        const id = 'loading-' + Date.now();
+        const div = document.createElement('div');
+        div.id = id;
+        div.className = 'message ai typing';
+        div.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Nexus is analyzing context...';
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+        return id;
+    }
+
+    function removeLoadingIndicator(id) {
+        const el = document.getElementById(id);
+        if(el) el.remove();
     }
 </script>
 
