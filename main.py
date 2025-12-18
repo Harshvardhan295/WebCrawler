@@ -241,6 +241,7 @@ You must generate answers using ONLY the information provided in the CONTENT.
 Do NOT use any prior knowledge or assumptions.
 
 Rules:
+- strictly answer in the same language as the question.
 - If the answer is not present, say the information is not available.
 - Ensure clarity, correctness, and good formatting.
 - Do not hallucinate.
