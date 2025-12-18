@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Chatbot</title>
+    <!-- Markdown Parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --primary: #6c5ce7;       /* Purple */
+            --primary-hover: #5b4cc4;
+            --bg-sidebar: #f4f3ff;    /* Very light purple */
+            --bg-main: #ffffff;
+            --text-dark: #2d3436;
+            --text-light: #636e72;
+            --user-bubble: #6c5ce7;
+            --ai-bubble: #f1f2f6;
+            --border: #dfe6e9;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+
+        body {
+            display: flex;
+            height: 100vh;
+            background-color: var(--bg-main);
+            color: var(--text-dark);
+        }
+
+        /* --- SIDEBAR --- */
+        .sidebar {
+            width: 300px;
+            background-color: var(--bg-sidebar);
+            padding: 2rem;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .brand {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-light);
+        }
+
+        input {
+            padding: 10px;
+            border: 1px solid #d1d8e0;
+            border-radius: 8px;
+            outline: none;
+            transition: 0.2s;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.1);
+        }
+
+        .btn {
+            padding: 12px;
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .btn:hover { background-color: var(--primary-hover); }
+        .btn:disabled { background-color: #b2bec3; cursor: not-allowed; }
+
+        .status-card {
+            background: white;
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 0.85rem;
+            display: none; /* Hidden by default */
+        }
+
+        .status-card.active { display: block; border-left: 4px solid var(--primary); }
+
+        /* --- CHAT AREA --- */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border);
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .messages {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 1rem;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 0.95rem;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background-color: var(--primary);
+            color: white;
+            border-bottom-right-radius: 2px;
+        }
+
+        .message.ai {
+            align-self: flex-start;
+            background-color: var(--ai-bubble);
+            color: var(--text-dark);
+            border-bottom-left-radius: 2px;
+        }
+
+        /* Sources styling */
+        .sources {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(0,0,0,0.1);
+            font-size: 0.8rem;
+        }
+        .sources a { color: var(--primary); text-decoration: none; }
+        .sources a:hover { text-decoration: underline; }
+
+        /* Input Area */
+        .input-area {
+            padding: 2rem;
+            background-color: white;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 1rem;
+        }
+
+        .input-area input {
+            flex: 1;
+        }
+
+        /* Loader */
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-right: 10px;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Markdown styles override */
+        .message p { margin-bottom: 0.5rem; }
+        .message ul { margin-left: 1.5rem; }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <div class="brand">
+            🟣 RAG Chatbot
+        </div>
+
+        <div class="input-group">
+            <label>Website URL</label>
+            <input type="text" id="urlInput" placeholder="https://example.com" value="https://devnovate.co/">
+        </div>
+
+        <div class="input-group">
+            <label>Max Pages</label>
+            <input type="number" id="pagesInput" value="10" min="1" max="50">
+        </div>
+        
+        <div class="input-group">
+            <label>Depth</label>
+            <input type="number" id="depthInput" value="2" min="1" max="5">
+        </div>
+
+        <button class="btn" id="crawlBtn" onclick="startCrawl()">🕷️ Start Indexing</button>
+
+        <div class="status-card" id="statusCard">
+            <strong>Active Collection:</strong><br>
+            <span id="collectionId" style="color: var(--primary); word-break: break-all;">-</span>
+        </div>
+    </aside>
+
+    <!-- MAIN CHAT -->
+    <main class="chat-area">
+        <div class="chat-header">
+            Chat Assistant
+        </div>
+
+        <div class="messages" id="messagesContainer">
+            <div class="message ai">
+                Hello! Please configure a website URL in the sidebar and click "Start Indexing" to begin.
+            </div>
+        </div>
+
+        <div class="input-area">
+            <input type="text" id="chatInput" placeholder="Type your question..." onkeypress="handleEnter(event)">
+            <button class="btn" onclick="sendMessage()" id="sendBtn" style="width: 100px;">Send</button>
+        </div>
+    </main>
+
+    <script>
+        const API_URL = "http://localhost:8000";
+        let currentCollection = null;
+        let chatHistory = [];
+
+        async function startCrawl() {
+            const url = document.getElementById('urlInput').value;
+            const maxPages = parseInt(document.getElementById('pagesInput').value);
+            const maxDepth = parseInt(document.getElementById('depthInput').value);
+            const btn = document.getElementById('crawlBtn');
+            const statusCard = document.getElementById('statusCard');
+
+            if (!url) return alert("Please enter a URL");
+
+            // UI Loading State
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loader"></div> Crawling...';
+
+            try {
+                const response = await fetch(`${API_URL}/crawl`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        url: url, 
+                        max_pages: maxPages, 
+                        max_depth: maxDepth 
+                    })
+                });
+
+                if (!response.ok) throw new Error("Crawl failed");
+
+                const data = await response.json();
+                
+                // Success State
+                currentCollection = data.collection_name;
+                document.getElementById('collectionId').innerText = currentCollection;
+                statusCard.classList.add('active');
+                
+                // Reset Chat
+                chatHistory = [];
+                document.getElementById('messagesContainer').innerHTML = `
+                    <div class="message ai">
+                        ✅ Indexing complete! I read <b>${data.pages_indexed}</b> pages. Ask me anything about ${url}.
+                    </div>`;
+
+            } catch (err) {
+                alert("Error: " + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🕷️ Start Indexing';
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const question = input.value.trim();
+            const messagesDiv = document.getElementById('messagesContainer');
+
+            if (!question) return;
+            if (!currentCollection) {
+                return alert("Please crawl a website first!");
+            }
+
+            // 1. Add User Message
+            appendMessage('user', question);
+            input.value = '';
+
+            // 2. Add Loading Message
+            const loadingId = 'loading-' + Date.now();
+            messagesDiv.innerHTML += `<div class="message ai" id="${loadingId}"><div class="loader"></div> Thinking...</div>`;
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+            try {
+                // 3. API Call
+                const response = await fetch(`${API_URL}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        collection_name: currentCollection,
+                        question: question,
+                        history: chatHistory
+                    })
+                });
+
+                const data = await response.json();
+                
+                // Remove loader
+                document.getElementById(loadingId).remove();
+
+                if (!response.ok) throw new Error(data.detail || "Chat error");
+
+                // 4. Update History & UI
+                chatHistory.push({ role: "user", content: question });
+                chatHistory.push({ role: "assistant", content: data.answer });
+
+                appendMessage('ai', data.answer, data.sources);
+
+            } catch (err) {
+                document.getElementById(loadingId).remove();
+                appendMessage('ai', "❌ Error: " + err.message);
+            }
+        }
+
+        function appendMessage(role, text, sources = []) {
+            const div = document.getElementById('messagesContainer');
+            
+            // Convert Markdown to HTML using marked.js
+            const htmlContent = marked.parse(text);
+            
+            let sourceHtml = '';
+            if (sources && sources.length > 0) {
+                sourceHtml = `<div class="sources"><b>Sources:</b><br>${sources.map(s => `<a href="${s}" target="_blank">${s}</a>`).join('<br>')}</div>`;
+            }
+
+            div.innerHTML += `
+                <div class="message ${role}">
+                    ${htmlContent}
+                    ${sourceHtml}
+                </div>
+            `;
+            div.scrollTop = div.scrollHeight;
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendMessage();
+        }
+    </script>
+</body>
+</html>

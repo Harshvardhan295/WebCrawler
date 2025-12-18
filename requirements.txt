@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+google-genai
+qdrant-client
+aiohttp
+requests
+streamlit
