@@ -1,0 +1,26 @@
+# ...existing code...
+# Editor/IDE
+.vscode/
+.idea/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# macOS
+.DS_Store
+
+# Python extensions / build artifacts
+*.pyd
+
+# dotenv local overrides
+.env
+.env.local
+.env.*.local
