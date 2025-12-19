@@ -48,8 +48,8 @@ app.add_middleware(
 # ================== MODELS ==================
 class CrawlRequest(BaseModel):
     url: str
-    max_depth: int = 3
-    max_pages: int = 5
+    max_depth: int = 2
+    max_pages: int = 30
 
 class Message(BaseModel):
     role: str
@@ -65,6 +65,7 @@ class CrawlResponse(BaseModel):
     collection_name: str
     pages_indexed: int
     crawled_urls: List[str]
+    suggested_questions: List[str] # <--- Added this
 
 # ================== HELPERS ==================
 def normalize_url(url: str) -> str:
@@ -107,7 +108,7 @@ async def process_url(session, url, depth, collection, domain, max_depth):
     text = await fetch_text(session, url)
     if not text:
         print(f"⚠️ Skipped (empty): {url}")
-        return set(), 0
+        return set(), 0, "" # Added empty string for text return
 
     chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
     points = []
@@ -133,18 +134,44 @@ async def process_url(session, url, depth, collection, domain, max_depth):
     if depth < max_depth:
         links = extract_links_from_markdown(text, url, domain)
 
-    return links, len(points)
+    return links, len(points), text # Return text to use for question generation
+
+# ================== QUESTION GENERATOR ==================
+async def generate_suggested_questions(text_blob: str) -> List[str]:
+    """Generates 5 engagement questions using Gemini."""
+    if not text_blob:
+        return ["What is this website about?", "What services are offered?", "How can I contact support?", "What are the pricing details?", "Tell me more."]
+    
+    prompt = f"""Analyze the following website content and generate exactly 5 specific and logical questions a user would likely ask a chatbot about the website content. Return ONLY a plain list of questions, one per line.
+    
+    CONTENT:
+    {text_blob[:6000]}"""
+    
+    try:
+        response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
+        return questions[:5]
+    except:
+        return ["Tell me more about this site.", "What services are offered?", "How can I contact you?"]
 
 # ================== CRAWLER ==================
 async def run_crawler(start_url: str, max_depth: int, max_pages: int):
     base_url = normalize_url(start_url)
     collection = sanitize_collection_name(base_url)
     domain = urlparse(base_url).netloc
+    
+    # Logic Fix: Check if collection exists to avoid redundant crawling
+    collection_exists = collection in [c.name for c in qdrant_client.get_collections().collections]
+    
+    if collection_exists:
+        print("⚡ Collection exists. Fetching existing context for questions...")
+        # To generate questions for an existing collection, we grab a few existing points
+        existing_points = qdrant_client.scroll(collection_name=collection, limit=3, with_payload=True)[0]
+        context = " ".join([p.payload['text'] for p in existing_points])
+        questions = await generate_suggested_questions(context)
+        return collection, 0, [], questions
 
-    if collection in [c.name for c in qdrant_client.get_collections().collections]:
-        print("⚡ Collection exists. Skipping crawl.")
-        return collection, 0, []
-
+    # Create collection if it doesn't exist
     qdrant_client.create_collection(
         collection_name=collection,
         vectors_config=VectorParams(size=768, distance=Distance.COSINE)
@@ -153,23 +180,24 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
     visited = set()
     crawled_urls = []
     queue = [(base_url, 1)]
+    first_page_text = ""
 
     async with aiohttp.ClientSession() as session:
         while queue and len(visited) < max_pages:
             url, depth = queue.pop(0)
             url = url.rstrip("/")
 
-            if url in visited:
-                continue
-
+            if url in visited: continue
             visited.add(url)
             crawled_urls.append(url)
 
-            new_links, chunks = await process_url(
+            new_links, chunks, text = await process_url(
                 session, url, depth, collection, domain, max_depth
             )
-
-            print(f"📦 Total indexed pages: {len(visited)}")
+            
+            # Save the text of the first successful page for questions
+            if not first_page_text:
+                first_page_text = text
 
             for link in new_links:
                 if link not in visited and len(visited) < max_pages:
@@ -177,21 +205,25 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
 
             await asyncio.sleep(0.3)
 
+    # Generate questions at the end of a new crawl
+    suggested_questions = await generate_suggested_questions(first_page_text)
+
     print("🎉 Crawl completed")
-    return collection, len(visited), crawled_urls
+    return collection, len(visited), crawled_urls, suggested_questions
 
 # ================== ROUTES ==================
 @app.post("/crawl", response_model=CrawlResponse)
 async def crawl_site(req: CrawlRequest):
     try:
-        collection, count, urls = await run_crawler(
+        collection, count, urls, questions = await run_crawler(
             req.url, req.max_depth, req.max_pages
         )
         return {
             "message": "Ready",
             "collection_name": collection,
             "pages_indexed": count,
-            "crawled_urls": urls
+            "crawled_urls": urls,
+            "suggested_questions": questions
         }
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -229,7 +261,7 @@ async def chat(req: ChatRequest):
 
         INSTRUCTIONS:
         - Answer only using the above content
-        - Keep the response concise, clear, and well-formatted
+        - Keep the response with well-formatted extra text
         - Do not include unnecessary explanations
 
         ANSWER:"""
@@ -252,14 +284,11 @@ Rules:
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 temperature=0.9,
-                max_output_tokens=512
+                max_output_tokens=1024
             )
         )
 
-        return {
-            "answer": response.text,
-            "sources": sources
-        }
+        return {"answer": response.text, "sources": sources}
 
     except Exception as e:
         raise HTTPException(500, str(e))

@@ -121,27 +121,32 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.02);
         }
 
-        /* Clickable Source Chips */
-        .source-container {
-            margin-top: 12px;
-            padding-top: 8px;
-            border-top: 1px solid var(--border);
+        /* Suggested Question Chips */
+        .chips-container {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+            padding: 0 5px;
         }
-        .source-link {
-            font-size: 0.7rem;
+
+        .chip {
+            background: white;
             color: var(--primary);
-            background: rgba(99, 102, 241, 0.1);
-            padding: 3px 8px;
-            border-radius: 4px;
-            text-decoration: none;
-            border: 1px solid rgba(99, 102, 241, 0.2);
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            margin: 2px;
-            transition: 0.2s;
+            border: 1px solid var(--primary);
+            padding: 7px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
         }
-        .source-link:hover { background: var(--primary); color: white; }
+
+        .chip:hover {
+            background: var(--primary);
+            color: white;
+            transform: translateY(-1px);
+        }
 
         /* Input Area */
         .input-area {
@@ -163,7 +168,6 @@
         #chatInput { border: none; flex: 1; padding: 10px; font-size: 1rem; }
         #chatInput:focus { outline: none; }
 
-        /* Typing/Loading Indicator */
         .typing { font-style: italic; color: var(--text-sub); font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
 
         ::-webkit-scrollbar { width: 6px; }
@@ -203,6 +207,8 @@
     </div>
 
     <div class="input-area">
+        <div id="suggestedQuestions" class="chips-container"></div>
+        
         <div class="chat-input-wrapper">
             <input id="chatInput" placeholder="Ask anything about the indexed data..." onkeypress="if(event.key==='Enter')send()">
             <button id="sendBtn" class="btn" onclick="send()" style="padding: 10px 20px;">
@@ -215,14 +221,14 @@
 <script>
     const API = "http://localhost:8000";
     let collection = null;
-    let history = []; // Correct format: [{role: "user", content: ""}, {role: "model", content: ""}]
+    let history = []; 
 
     async function startCrawl() {
         const btn = document.getElementById('indexBtn');
-        const url = document.getElementById('urlInput').value;
+        const urlInput = document.getElementById('urlInput');
+        const url = urlInput.value;
         if(!url) return alert("Enter a URL");
 
-        // UI State: Loading
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Indexing...';
 
@@ -234,10 +240,28 @@
             });
             const d = await res.json();
 
+            // 1. UPDATE COLLECTION DATA
             collection = d.collection_name;
             document.getElementById('collectionId').innerText = collection;
             document.getElementById('statusCard').style.display = "block";
 
+            // 2. RENDER THE QUESTIONS AS CLIPS
+            const chipBox = document.getElementById('suggestedQuestions');
+            chipBox.innerHTML = ""; // Clear old ones
+            if (d.suggested_questions && d.suggested_questions.length > 0) {
+                d.suggested_questions.forEach(q => {
+                    const chip = document.createElement('div');
+                    chip.className = 'chip';
+                    chip.innerText = q;
+                    chip.onclick = () => {
+                        document.getElementById('chatInput').value = q;
+                        send(); // Auto-send when clicked
+                    };
+                    chipBox.appendChild(chip);
+                });
+            }
+
+            // 3. UPDATE CRAWLED LIST
             const list = document.getElementById('crawledList');
             list.innerHTML = "";
             d.crawled_urls.forEach(u => {
@@ -245,7 +269,7 @@
             });
             document.getElementById('crawledCard').style.display = "block";
 
-            addMessage('ai', `Success: Indexed **${d.pages_indexed}** pages into \`${collection}\`.`);
+            addMessage('ai', `Success: Indexed **${d.pages_indexed}** pages. Use the suggestions below or ask your own question!`);
         } catch (e) {
             addMessage('ai', 'Error: Failed to connect to backend.');
         } finally {
@@ -262,11 +286,9 @@
         if(!q) return;
         if(!collection) return addMessage('ai', 'Please index a website first.');
 
-        // UI State: User Message
         addMessage('user', q);
         input.value = "";
         
-        // Show AI Loading State
         const loadingId = addLoadingIndicator();
         sendBtn.disabled = true;
 
@@ -283,11 +305,8 @@
             const d = await r.json();
             
             removeLoadingIndicator(loadingId);
-            
-            // Render Answer with Sources
             addMessage('ai', d.answer, d.sources);
             
-            // Update History (matches backend Message model)
             history.push({ role: "user", content: q });
             history.push({ role: "model", content: d.answer });
             
@@ -310,7 +329,8 @@
             html += `<div class="source-container">
                 <div style="font-size:0.65rem; font-weight:bold; color:var(--text-sub); margin-bottom:4px;">SOURCES</div>
                 ${sources.map(s => {
-                    const name = new URL(s).pathname === "/" ? "Homepage" : new URL(s).pathname;
+                    const urlObj = new URL(s);
+                    const name = urlObj.pathname === "/" ? "Homepage" : urlObj.pathname;
                     return `<a href="${s}" target="_blank" class="source-link"><i class="fas fa-link"></i> ${name}</a>`
                 }).join('')}
             </div>`;
