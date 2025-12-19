@@ -49,7 +49,7 @@ app.add_middleware(
 class CrawlRequest(BaseModel):
     url: str
     max_depth: int = 2
-    max_pages: int = 30
+    max_pages: int = 10
 
 class Message(BaseModel):
     role: str
