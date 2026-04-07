@@ -175,7 +175,7 @@ async def generate_suggested_questions(text_blob: str) -> List[str]:
     {text_blob[:6000]}"""
     
     try:
-        response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
         return questions[:5]
     except Exception as e:
