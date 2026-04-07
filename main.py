@@ -3,6 +3,7 @@ import re
 import uuid
 import asyncio
 import aiohttp
+import traceback  # Added for deep error logging
 from urllib.parse import urlparse, urljoin
 from typing import List
 
@@ -24,7 +25,7 @@ QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 if not GOOGLE_API_KEY or not QDRANT_URL:
-    raise ValueError("Missing environment variables")
+    raise ValueError("Missing environment variables. Please check your Render environment setup.")
 
 # ================== CLIENTS ==================
 gemini_client = genai.Client(api_key=GOOGLE_API_KEY)
@@ -65,7 +66,7 @@ class CrawlResponse(BaseModel):
     collection_name: str
     pages_indexed: int
     crawled_urls: List[str]
-    suggested_questions: List[str] # <--- Added this
+    suggested_questions: List[str]
 
 # ================== HELPERS ==================
 def normalize_url(url: str) -> str:
@@ -107,8 +108,8 @@ async def process_url(session, url, depth, collection, domain, max_depth):
 
     text = await fetch_text(session, url)
     if not text:
-        print(f"⚠️ Skipped (empty): {url}")
-        return set(), 0, "" # Added empty string for text return
+        print(f"⚠️ Skipped (empty or failed to fetch): {url}")
+        return set(), 0, "" 
 
     chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
     points = []
@@ -134,7 +135,7 @@ async def process_url(session, url, depth, collection, domain, max_depth):
     if depth < max_depth:
         links = extract_links_from_markdown(text, url, domain)
 
-    return links, len(points), text # Return text to use for question generation
+    return links, len(points), text 
 
 # ================== QUESTION GENERATOR ==================
 async def generate_suggested_questions(text_blob: str) -> List[str]:
@@ -151,7 +152,8 @@ async def generate_suggested_questions(text_blob: str) -> List[str]:
         response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
         return questions[:5]
-    except:
+    except Exception as e:
+        print(f"⚠️ Failed to generate questions: {e}")
         return ["Tell me more about this site.", "What services are offered?", "How can I contact you?"]
 
 # ================== CRAWLER ==================
@@ -160,22 +162,25 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
     collection = sanitize_collection_name(base_url)
     domain = urlparse(base_url).netloc
     
-    # Logic Fix: Check if collection exists to avoid redundant crawling
-    collection_exists = collection in [c.name for c in qdrant_client.get_collections().collections]
+    # ---------------------------------------------------------
+    # FIX: Safer way to check if collection exists in Qdrant
+    # ---------------------------------------------------------
+    print(f"⚙️ Checking if collection '{collection}' exists in Qdrant...")
+    collection_exists = qdrant_client.collection_exists(collection_name=collection)
     
     if collection_exists:
         print("⚡ Collection exists. Fetching existing context for questions...")
-        # To generate questions for an existing collection, we grab a few existing points
         existing_points = qdrant_client.scroll(collection_name=collection, limit=3, with_payload=True)[0]
-        context = " ".join([p.payload['text'] for p in existing_points])
+        context = " ".join([p.payload.get('text', '') for p in existing_points])
         questions = await generate_suggested_questions(context)
         return collection, 0, [], questions
-
-    # Create collection if it doesn't exist
-    qdrant_client.create_collection(
-        collection_name=collection,
-        vectors_config=VectorParams(size=768, distance=Distance.COSINE)
-    )
+    else:
+        print(f"⚙️ Collection does NOT exist. Creating new collection: {collection}")
+        # Create collection if it doesn't exist
+        qdrant_client.create_collection(
+            collection_name=collection,
+            vectors_config=VectorParams(size=768, distance=Distance.COSINE)
+        )
 
     visited = set()
     crawled_urls = []
@@ -196,7 +201,7 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
             )
             
             # Save the text of the first successful page for questions
-            if not first_page_text:
+            if not first_page_text and text:
                 first_page_text = text
 
             for link in new_links:
@@ -226,6 +231,9 @@ async def crawl_site(req: CrawlRequest):
             "suggested_questions": questions
         }
     except Exception as e:
+        print("\n❌ ================= CRITICAL ERROR IN /crawl =================")
+        traceback.print_exc()  # Prints the EXACT line of the crash to Render logs
+        print("==============================================================\n")
         raise HTTPException(500, str(e))
 
 @app.post("/chat")
@@ -291,6 +299,9 @@ Rules:
         return {"answer": response.text, "sources": sources}
 
     except Exception as e:
+        print("\n❌ ================= CRITICAL ERROR IN /chat =================")
+        traceback.print_exc()
+        print("==============================================================\n")
         raise HTTPException(500, str(e))
 
 # ================== RUN ==================
