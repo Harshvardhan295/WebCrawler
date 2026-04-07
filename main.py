@@ -3,7 +3,7 @@ import re
 import uuid
 import asyncio
 import aiohttp
-import traceback  # Added for deep error logging
+import traceback
 from urllib.parse import urlparse, urljoin
 from typing import List
 
@@ -68,6 +68,34 @@ class CrawlResponse(BaseModel):
     crawled_urls: List[str]
     suggested_questions: List[str]
 
+# ================== DYNAMIC EMBEDDING PIPELINE ==================
+# We dynamically select the working model so we don't crash on 404s
+EMBEDDING_MODEL = "text-embedding-004"
+
+def get_embedding(text: str) -> List[float]:
+    """Dynamically fetch embeddings, with fallbacks for API key restrictions."""
+    global EMBEDDING_MODEL
+    models_to_try = [EMBEDDING_MODEL, "gemini-embedding-001", "text-embedding-004", "embedding-001"]
+    
+    # Remove duplicates while keeping order
+    seen = set()
+    models = [x for x in models_to_try if not (x in seen or seen.add(x))]
+
+    last_error = None
+    for model_name in models:
+        try:
+            emb = gemini_client.models.embed_content(
+                model=model_name,
+                contents=text
+            )
+            EMBEDDING_MODEL = model_name  # Lock in the working model for speed
+            return emb.embeddings[0].values
+        except Exception as e:
+            last_error = e
+            continue
+            
+    raise ValueError(f"All embedding models failed. Last error: {last_error}")
+
 # ================== HELPERS ==================
 def normalize_url(url: str) -> str:
     parsed = urlparse(url.strip())
@@ -115,18 +143,16 @@ async def process_url(session, url, depth, collection, domain, max_depth):
     points = []
 
     for i, chunk in enumerate(chunks, 1):
-        # FIX 1: Updated the deprecated text-embedding-004 model to gemini-embedding-001
-        emb = gemini_client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=chunk
-        )
-        vector = emb.embeddings[0].values
-
-        points.append(PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vector,
-            payload={"text": chunk, "url": url}
-        ))
+        try:
+            vector = get_embedding(chunk)
+            points.append(PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={"text": chunk, "url": url}
+            ))
+        except Exception as e:
+            print(f"⚠️ Embedding failed for a chunk: {e}")
+            continue
 
     if points:
         qdrant_client.upsert(collection_name=collection, points=points)
@@ -140,7 +166,6 @@ async def process_url(session, url, depth, collection, domain, max_depth):
 
 # ================== QUESTION GENERATOR ==================
 async def generate_suggested_questions(text_blob: str) -> List[str]:
-    """Generates 5 engagement questions using Gemini."""
     if not text_blob:
         return ["What is this website about?", "What services are offered?", "How can I contact support?", "What are the pricing details?", "Tell me more."]
     
@@ -150,7 +175,7 @@ async def generate_suggested_questions(text_blob: str) -> List[str]:
     {text_blob[:6000]}"""
     
     try:
-        response = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
         return questions[:5]
     except Exception as e:
@@ -166,18 +191,46 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
     print(f"⚙️ Checking if collection '{collection}' exists in Qdrant...")
     collection_exists = qdrant_client.collection_exists(collection_name=collection)
     
+    # FIX: Dynamically determine the exact vector dimension outputted by Gemini
+    print("⚙️ Determining embedding dimension dynamically...")
+    try:
+        test_vector = get_embedding("test_dimension")
+        vector_dim = len(test_vector)
+        print(f"✅ Using model: {EMBEDDING_MODEL} (Dimension: {vector_dim})")
+    except Exception as e:
+        print(f"❌ Critical error getting embedding: {e}")
+        raise e
+        
     if collection_exists:
-        print("⚡ Collection exists. Fetching existing context for questions...")
+        # FIX: Check if the old Qdrant collection matches the new dynamic vector size
+        try:
+            col_info = qdrant_client.get_collection(collection_name=collection)
+            v_config = col_info.config.params.vectors
+            existing_dim = getattr(v_config, 'size', None)
+            
+            if existing_dim is None and isinstance(v_config, dict):
+                existing_dim = v_config.get("size")
+
+            if existing_dim and existing_dim != vector_dim:
+                print(f"⚠️ Dimension mismatch! DB expects {existing_dim}, but Gemini outputs {vector_dim}. Recreating DB...")
+                qdrant_client.delete_collection(collection_name=collection)
+                collection_exists = False
+        except Exception as e:
+            print(f"⚠️ Error checking collection dimension: {e}. Recreating to be safe...")
+            qdrant_client.delete_collection(collection_name=collection)
+            collection_exists = False
+            
+    if collection_exists:
+        print("⚡ Collection exists and dimensions match. Fetching existing context...")
         existing_points = qdrant_client.scroll(collection_name=collection, limit=3, with_payload=True)[0]
         context = " ".join([p.payload.get('text', '') for p in existing_points])
         questions = await generate_suggested_questions(context)
         return collection, 0, [], questions
     else:
-        print(f"⚙️ Collection does NOT exist. Creating new collection: {collection}")
-        # Create collection if it doesn't exist
+        print(f"⚙️ Creating new collection: {collection} with exact size {vector_dim}")
         qdrant_client.create_collection(
             collection_name=collection,
-            vectors_config=VectorParams(size=768, distance=Distance.COSINE)
+            vectors_config=VectorParams(size=vector_dim, distance=Distance.COSINE)
         )
 
     visited = set()
@@ -198,7 +251,6 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
                 session, url, depth, collection, domain, max_depth
             )
             
-            # Save the text of the first successful page for questions
             if not first_page_text and text:
                 first_page_text = text
 
@@ -208,7 +260,6 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
 
             await asyncio.sleep(0.3)
 
-    # Generate questions at the end of a new crawl
     suggested_questions = await generate_suggested_questions(first_page_text)
 
     print("🎉 Crawl completed")
@@ -237,12 +288,8 @@ async def crawl_site(req: CrawlRequest):
 @app.post("/chat")
 async def chat(req: ChatRequest):
     try:
-        # FIX 2: Updated the deprecated text-embedding-004 model to gemini-embedding-001
-        emb = gemini_client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=req.question
-        )
-        query_vector = emb.embeddings[0].values
+        # FIX: Use the dynamic embedding pipeline here as well to guarantee matching sizes
+        query_vector = get_embedding(req.question)
 
         results = qdrant_client.query_points(
             collection_name=req.collection_name,
