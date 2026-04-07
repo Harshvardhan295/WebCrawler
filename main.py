@@ -115,8 +115,9 @@ async def process_url(session, url, depth, collection, domain, max_depth):
     points = []
 
     for i, chunk in enumerate(chunks, 1):
+        # FIX 1: Updated the deprecated text-embedding-004 model to gemini-embedding-001
         emb = gemini_client.models.embed_content(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             contents=chunk
         )
         vector = emb.embeddings[0].values
@@ -149,7 +150,7 @@ async def generate_suggested_questions(text_blob: str) -> List[str]:
     {text_blob[:6000]}"""
     
     try:
-        response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
         return questions[:5]
     except Exception as e:
@@ -162,9 +163,6 @@ async def run_crawler(start_url: str, max_depth: int, max_pages: int):
     collection = sanitize_collection_name(base_url)
     domain = urlparse(base_url).netloc
     
-    # ---------------------------------------------------------
-    # FIX: Safer way to check if collection exists in Qdrant
-    # ---------------------------------------------------------
     print(f"⚙️ Checking if collection '{collection}' exists in Qdrant...")
     collection_exists = qdrant_client.collection_exists(collection_name=collection)
     
@@ -232,15 +230,16 @@ async def crawl_site(req: CrawlRequest):
         }
     except Exception as e:
         print("\n❌ ================= CRITICAL ERROR IN /crawl =================")
-        traceback.print_exc()  # Prints the EXACT line of the crash to Render logs
+        traceback.print_exc()
         print("==============================================================\n")
         raise HTTPException(500, str(e))
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     try:
+        # FIX 2: Updated the deprecated text-embedding-004 model to gemini-embedding-001
         emb = gemini_client.models.embed_content(
-            model="text-embedding-004",
+            model="gemini-embedding-001",
             contents=req.question
         )
         query_vector = emb.embeddings[0].values
